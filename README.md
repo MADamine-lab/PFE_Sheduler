@@ -1,0 +1,181 @@
+# PFE Scheduler
+
+A Django-based REST API for intelligent class scheduling with NLP-powered constraint matching and conflict resolution.
+
+## Overview
+
+PFE Scheduler is a backend service that automates the generation of class schedules while respecting complex constraints. It uses natural language processing to semantically match scheduling requirements and provides a flexible API for frontend integration.
+
+## Features
+
+- **Intelligent Scheduling**: CSP (Constraint Satisfaction Problem) solver for optimal schedule generation
+- **NLP Constraint Matching**: Semantic similarity matching for scheduling constraints using `sentence-transformers`
+- **File Import**: Support for Excel and CSV files to bulk import courses, instructors, and rooms
+- **Export Options**: Generate schedules in PDF and Excel formats
+- **REST API**: Complete API built with Django REST Framework
+- **CORS Support**: Ready for React/Vue frontend integration
+
+## Tech Stack
+
+- **Backend**: Django 4.2 + Django REST Framework
+- **Database**: SQLite (dev) / PostgreSQL (production)
+- **NLP**: sentence-transformers, scikit-learn
+- **Data Processing**: pandas, openpyxl
+- **Export**: reportlab (PDF generation)
+
+## Project Structure
+
+```
+PFE_Project/
+├── scheduler/              # Main Django app
+│   └── models.py          # Database models
+├── setting.py             # Django settings configuration
+├── urls.py                # URL routing
+├── wsgi.py                # WSGI entry point
+├── requirments.txt        # Python dependencies
+└── README.md              # This file
+```
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.8+
+- pip
+
+### Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd PFE_Project
+   ```
+
+2. **Create a virtual environment**
+   ```bash
+   python -m venv venv
+   # On Windows:
+   venv\Scripts\activate
+   # On macOS/Linux:
+   source venv/bin/activate
+   ```
+
+3. **Install dependencies**
+   ```bash
+   pip install -r requirments.txt
+   ```
+
+4. **Environment Setup**
+   Create a `.env` file in the project root:
+   ```
+   SECRET_KEY=your-secret-key-here
+   DEBUG=True
+   ALLOWED_HOSTS=localhost,127.0.0.1
+   ```
+
+5. **Initialize database**
+   ```bash
+   python manage.py migrate
+   python manage.py createsuperuser
+   ```
+
+### Running the Server
+
+```bash
+python manage.py runserver
+```
+
+The API will be available at `http://localhost:8000`
+
+**Admin Panel**: `http://localhost:8000/admin/`
+
+## API Documentation
+
+Key endpoints (detailed documentation can be generated with tools like `drf-spectacular`):
+
+- `GET /api/schedules/` - List all schedules
+- `POST /api/schedules/` - Create a new schedule
+- `GET /api/schedules/<id>/` - Retrieve a specific schedule
+- `POST /api/import/` - Import courses from file
+- `POST /api/export/` - Export schedule to PDF/Excel
+
+## Key Components
+
+### Scheduler App
+The core app containing:
+- **Models** - Course, Instructor, Room, TimeSlot, Schedule
+- **Serializers** - REST API serialization layer
+- **Views** - API endpoints for schedule management
+- **NLP Matcher** - Semantic constraint matching
+- **CSP Scheduler** - Constraint satisfaction solver
+
+### File Parsing
+- Supports Excel (.xlsx, .xls) and CSV formats
+- Bulk import for courses, instructors, and room configurations
+
+### Export Engine
+- PDF generation with reportlab
+- Excel export with openpyxl
+
+## Development
+
+### Run Tests
+```bash
+python manage.py test
+```
+
+### Database Migrations
+```bash
+python manage.py makemigrations
+python manage.py migrate
+```
+
+### Create Django Admin
+```bash
+python manage.py createsuperuser
+```
+
+## Frontend Integration
+
+This backend is designed to work with a React/Vue frontend running on a separate port (typically 3000 or 5173).
+
+CORS is already configured in settings. Frontend should call:
+```
+http://localhost:8000/api/
+```
+
+## Deployment
+
+For production:
+
+1. **Update `.env`**:
+   ```
+   DEBUG=False
+   SECRET_KEY=<strong-random-key>
+   ALLOWED_HOSTS=yourdomain.com,www.yourdomain.com
+   ```
+
+2. **Use PostgreSQL instead of SQLite**:
+   ```bash
+   pip install psycopg2-binary
+   ```
+
+3. **Deploy with Gunicorn**:
+   ```bash
+   pip install gunicorn
+   gunicorn pfe_project.wsgi:application --bind 0.0.0.0:8000
+   ```
+
+## Notes
+
+- Store sensitive data (DB credentials, API keys) in `.env` - never commit to version control
+- Ensure `.env` is added to `.gitignore`
+- For development with React frontend, both servers can run concurrently on different ports
+
+## License
+
+[Add your license here]
+
+## Support
+
+For issues or questions, please open an issue in the repository.

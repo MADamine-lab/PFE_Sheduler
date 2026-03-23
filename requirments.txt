@@ -1,0 +1,28 @@
+# ── Web framework ─────────────────────────────────────────────────────────────
+Django==4.2.13                  # replaces Flask — the core framework
+djangorestframework==3.15.1     # replaces jsonify() — gives us APIView, serializers, Response
+
+# ── Database ───────────────────────────────────────────────────────────────────
+# Django ships its own ORM — no SQLAlchemy needed
+# Default DB is SQLite (fine for dev). For PostgreSQL, add:
+# psycopg2-binary==2.9.9
+
+# ── File parsing (unchanged from Flask version) ────────────────────────────────
+pandas==2.2.2
+openpyxl==3.1.2                 # Excel read/write — used in file_parser.py + export.py
+xlrd==2.0.1                     # Legacy .xls support
+
+# ── NLP — unchanged ────────────────────────────────────────────────────────────
+numpy==1.26.4                   # used in csp_scheduler.py (score matrix)
+sentence-transformers==2.7.0    # used in nlp_matcher.py (semantic similarity)
+scikit-learn==1.4.2             # cosine_similarity in nlp_matcher.py
+torch==2.3.0                    # required by sentence-transformers
+
+# ── PDF export (optional, same as Flask version) ───────────────────────────────
+reportlab==4.1.0                # used in export.py PDF route
+
+# ── CORS (needed if your React/Vue frontend is on a different port) ─────────────
+django-cors-headers==4.3.1      # replaces Flask-CORS
+
+# ── Dev utilities ──────────────────────────────────────────────────────────────
+python-dotenv==1.0.1            # load .env variables into settings.py
