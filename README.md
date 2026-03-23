@@ -50,7 +50,7 @@ pfe_project/                   ← run everything from here
     ├── __init__.py
     ├── nlp_matcher.py         ← unchanged logic
     ├── csp_scheduler.py       ← unchanged logic
-    └── file_parser.py         ← unchanged logic
+    └── file_parser.py         ← unchanged logic    
 ```
 
 ## Getting Started
