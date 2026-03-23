@@ -48,9 +48,9 @@ pfe_project/                   ← run everything from here
 │
 └── services/                  ← pure Python, zero Django dependency
     ├── __init__.py
-    ├── nlp_matcher.py         ← unchanged logic
-    ├── csp_scheduler.py       ← unchanged logic
-    └── file_parser.py         ← unchanged logic    
+   ├── nlp_matcher.py         ← unchanged logic
+   ├── csp_scheduler.py       ← unchanged logic
+   └── file_parser.py         ← unchanged logic
 ```
 
 ## Getting Started
