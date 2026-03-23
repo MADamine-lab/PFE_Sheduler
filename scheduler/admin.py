@@ -1,337 +1,160 @@
 """
-scheduler/export.py
+scheduler/admin.py
 
-Excel and PDF export views.
+Django Admin panel registration.
 
-Flask equivalent: routes/export.py  (export_bp Blueprint)
+Flask had NO equivalent — this is a free Django feature.
+Visit http://localhost:8000/admin/ after running:
 
-Key differences vs Flask
+    python manage.py createsuperuser
+
+You get a full CRUD interface for every model — search, filter, pagination,
+inline editing — with zero frontend code.
+
+This is extremely useful during development:
+    - Inspect the DB after running the scheduler
+    - Manually fix a wrong jury assignment
+    - Check NLP scores on individual affectations
+    - Delete / re-import data without touching the API
+
+How Django admin works
 ──────────────────────────────────────────────────────────────────────────────
-| Flask                              | Django / DRF                           |
-|──────────────────────────────────────────────────────────────────────────── |
-| send_file(buf, mimetype=...,       | FileResponse(buf, content_type=...)    |
-|           as_attachment=True,      | with Content-Disposition header set    |
-|           download_name="x.xlsx") | manually                               |
-|──────────────────────────────────────────────────────────────────────────── |
-| Affectation.query.all()            | Affectation.objects.select_related()   |
-|                                    | (avoids N+1 queries)                   |
-|──────────────────────────────────────────────────────────────────────────── |
-| return jsonify({"error":...}), 501 | return Response({...},                 |
-|                                    |   status=HTTP_501_NOT_IMPLEMENTED)     |
+  1. You register a model with admin.site.register(Model, ModelAdmin)
+  2. ModelAdmin controls how that model appears in the interface:
+       list_display  → columns shown in the list view
+       list_filter   → sidebar filter panel
+       search_fields → search box (SQL ILIKE query)
+       readonly_fields → fields shown but not editable
+       inlines       → nested related objects in the detail view
 ──────────────────────────────────────────────────────────────────────────────
-
-The Excel and PDF generation logic (openpyxl / reportlab) is completely
-unchanged from your Flask version — only the view wrapper changes.
 """
 
-import io
-from django.http import FileResponse
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-
-import openpyxl
-from openpyxl.styles import PatternFill, Font, Alignment
-from openpyxl.utils import get_column_letter
-from collections import defaultdict
-
-from .models import Affectation
+from django.contrib import admin
+from .models import Etudiant, Professeur, Creneau, Affectation
 
 
-# ── Shared helper (unchanged from Flask version) ──────────────────────────────
+# ── Professeur ────────────────────────────────────────────────────────────────
 
-def _style_header(ws, row, ncols, color="1F4E79"):
+@admin.register(Professeur)
+class ProfesseurAdmin(admin.ModelAdmin):
     """
-    Applies bold white text on a dark background to a header row.
-    Identical to the Flask version — pure openpyxl, no Flask dependency.
-    """
-    fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
-    font = Font(color="FFFFFF", bold=True)
-    for col in range(1, ncols + 1):
-        c = ws.cell(row=row, column=col)
-        c.fill = fill
-        c.font = font
-        c.alignment = Alignment(
-            horizontal="center", vertical="center", wrap_text=True
-        )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  EXCEL EXPORT
-#  Flask: @export_bp.route("/excel", methods=["GET"])
-#  Django: GET /api/export/excel/
-# ══════════════════════════════════════════════════════════════════════════════
-
-class ExportExcelView(APIView):
-    """
-    Generates and streams a multi-sheet Excel workbook.
-
-    Sheet 1 — "Planning Soutenances" : all assignments
-    Sheet 2…N — one sheet per domain (Informatique, Electrique, …)
-
-    Flask used send_file(buf, as_attachment=True, download_name="x.xlsx").
-    Django uses FileResponse which streams the BytesIO buffer directly.
-    The Content-Disposition header tells the browser to download the file.
+    List view shows the most useful columns for quick scanning.
+    search_fields enables the search box — Django generates:
+        WHERE nom ILIKE '%query%' OR prenom ILIKE '%query%'
+    list_filter adds a sidebar to filter by domaine with one click.
     """
 
-    def get(self, request):
+    list_display   = ["id", "nom", "prenom", "domaine", "grade"]
+    search_fields  = ["nom", "prenom", "id"]
+    list_filter    = ["domaine", "grade"]
+    ordering       = ["nom"]
 
-        # select_related → single SQL JOIN for all FK relations
-        # Flask: Affectation.query.all()  (caused N+1 queries)
-        # Django: select_related fetches everything in one query
-        affectations = Affectation.objects.select_related(
-            "etudiant__encadrant",
-            "examinateur",
-            "president",
-            "creneau",
-        ).all()
-
-        wb = openpyxl.Workbook()
-
-        # ── Sheet 1: Full planning ─────────────────────────────────────────────
-        ws = wb.active
-        ws.title = "Planning Soutenances"
-
-        headers = [
-            "Étudiant ID", "Nom", "Prénom", "Domaine", "Sujet",
-            "Encadrant", "Examinateur", "Président",
-            "Date", "Créneau", "Salle",
-            "Score Exam.", "Score Prés.",
-        ]
-        ws.append(headers)
-        _style_header(ws, 1, len(headers))
-        ws.row_dimensions[1].height = 30
-
-        domain_colors = {
-            "Informatique": "DDEEFF",
-            "Electrique":   "DDFFEE",
-            "Mecanique":    "FFF3CD",
-            "Energetique":  "FFE0E0",
-            "Genie Civil":  "F0E6FF",
-        }
-
-        for i, aff in enumerate(affectations, 2):
-            # Django ORM: access related objects via dot notation
-            # select_related() means these do NOT trigger extra DB queries
-            etu  = aff.etudiant
-            enc  = etu.encadrant if etu else None    # etu.encadrant → Professeur
-            exam = aff.examinateur
-            pres = aff.president
-            cr   = aff.creneau
-
-            row = [
-                etu.id     if etu  else "",
-                etu.nom    if etu  else "",
-                etu.prenom if etu  else "",
-                etu.domaine if etu else "",
-                etu.sujet  if etu  else "",
-                f"{enc.prenom} {enc.nom}"   if enc  else "",
-                f"{exam.prenom} {exam.nom}" if exam else "",
-                f"{pres.prenom} {pres.nom}" if pres else "",
-                cr.date  if cr else "",
-                cr.slot  if cr else "",
-                cr.salle if cr else "",
-                round(aff.score_exam, 2),
-                round(aff.score_pres, 2),
-            ]
-            ws.append(row)
-
-            color = domain_colors.get(etu.domaine if etu else "", "F5F5F5")
-            fill  = PatternFill(start_color=color, end_color=color, fill_type="solid")
-            for col in range(1, len(headers) + 1):
-                ws.cell(row=i, column=col).fill = fill
-                ws.cell(row=i, column=col).alignment = Alignment(
-                    wrap_text=True, vertical="center"
-                )
-
-        col_widths = [12, 14, 12, 14, 60, 22, 22, 22, 13, 16, 18, 13, 13]
-        for j, w in enumerate(col_widths, 1):
-            ws.column_dimensions[get_column_letter(j)].width = w
-
-        # ── Sheets 2…N: One per domain ─────────────────────────────────────────
-        by_domain = defaultdict(list)
-        for aff in affectations:
-            dom = aff.etudiant.domaine if aff.etudiant else "Autre"
-            by_domain[dom].append(aff)
-
-        for dom, affs in by_domain.items():
-            ws2 = wb.create_sheet(dom[:25])
-            ws2.append(headers)
-            _style_header(ws2, 1, len(headers), "145A32")
-
-            for i, aff in enumerate(affs, 2):
-                etu  = aff.etudiant
-                enc  = etu.encadrant if etu else None
-                exam = aff.examinateur
-                pres = aff.president
-                cr   = aff.creneau
-
-                ws2.append([
-                    etu.id     if etu  else "",
-                    etu.nom    if etu  else "",
-                    etu.prenom if etu  else "",
-                    etu.domaine if etu else "",
-                    etu.sujet  if etu  else "",
-                    f"{enc.prenom} {enc.nom}"   if enc  else "",
-                    f"{exam.prenom} {exam.nom}" if exam else "",
-                    f"{pres.prenom} {pres.nom}" if pres else "",
-                    cr.date  if cr else "",
-                    cr.slot  if cr else "",
-                    cr.salle if cr else "",
-                    round(aff.score_exam, 2),
-                    round(aff.score_pres, 2),
-                ])
-
-                color = "EAF3DE" if i % 2 == 0 else "FFFFFF"
-                fill  = PatternFill(start_color=color, end_color=color, fill_type="solid")
-                for col in range(1, len(headers) + 1):
-                    ws2.cell(row=i, column=col).fill = fill
-
-            for j, w in enumerate(col_widths, 1):
-                ws2.column_dimensions[get_column_letter(j)].width = w
-
-        # ── Stream workbook to client ──────────────────────────────────────────
-        # Flask:  send_file(buf, mimetype="application/vnd...", as_attachment=True,
-        #                   download_name="planning_soutenances_PFE.xlsx")
-        #
-        # Django: FileResponse streams the buffer.
-        #         Content-Disposition tells the browser to download the file.
-        buf = io.BytesIO()
-        wb.save(buf)
-        buf.seek(0)
-
-        response = FileResponse(
-            buf,
-            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        response["Content-Disposition"] = (
-            'attachment; filename="planning_soutenances_PFE.xlsx"'
-        )
-        return response
+    # Show specialites and disponibilites as read-only formatted text
+    # (they are stored as semicolon strings — the list helpers make them readable)
+    readonly_fields = ["specialites", "disponibilites"]
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  PDF EXPORT
-#  Flask: @export_bp.route("/pdf", methods=["GET"])
-#  Django: GET /api/export/pdf/
-# ══════════════════════════════════════════════════════════════════════════════
+# ── Etudiant ──────────────────────────────────────────────────────────────────
 
-class ExportPdfView(APIView):
+@admin.register(Etudiant)
+class EtudiantAdmin(admin.ModelAdmin):
     """
-    Generates and streams a landscape A4 PDF using reportlab.
-
-    The reportlab generation code is 100% identical to the Flask version.
-    Only the response wrapper changes:
-        Flask  → send_file(buf, mimetype="application/pdf", as_attachment=True)
-        Django → FileResponse(buf, content_type="application/pdf")
+    encadrant__nom uses Django's __ traversal to display the related
+    Professeur's name directly in the list — no extra query needed
+    because Django admin calls select_related automatically.
     """
 
-    def get(self, request):
+    list_display  = ["id", "nom", "prenom", "domaine", "encadrant", "annee"]
+    search_fields = ["nom", "prenom", "id", "sujet"]
+    list_filter   = ["domaine", "annee"]
+    ordering      = ["domaine", "nom"]
 
-        # ── Check reportlab is installed ───────────────────────────────────────
-        # Flask: try/except ImportError → return jsonify({"error":...}), 501
-        # Django: same pattern, but return DRF Response with HTTP 501
-        try:
-            from reportlab.lib.pagesizes import A4, landscape
-            from reportlab.lib import colors
-            from reportlab.platypus import (
-                SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-            )
-            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-            from reportlab.lib.units import cm
-        except ImportError:
-            return Response(
-                {"error": "reportlab non installé — utilisez l'export Excel"},
-                status=status.HTTP_501_NOT_IMPLEMENTED,
-            )
+    # raw_id_fields → shows a small popup to pick the encadrant by ID
+    # instead of a slow <select> dropdown with all professors
+    raw_id_fields = ["encadrant"]
 
-        # Fetch all assignments with related objects in one query
-        affectations = Affectation.objects.select_related(
-            "etudiant__encadrant",
-            "examinateur",
-            "president",
-            "creneau",
-        ).all()
 
-        # ── Build PDF (identical to Flask version) ─────────────────────────────
-        buf = io.BytesIO()
-        doc = SimpleDocTemplate(
-            buf,
-            pagesize=landscape(A4),
-            leftMargin=1*cm, rightMargin=1*cm,
-            topMargin=1.5*cm, bottomMargin=1*cm,
-        )
+# ── Creneau ───────────────────────────────────────────────────────────────────
 
-        styles      = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            "title", parent=styles["Heading1"], fontSize=14,
-            spaceAfter=12, textColor=colors.HexColor("#1F4E79"),
-        )
-        small = ParagraphStyle(
-            "small", parent=styles["Normal"], fontSize=7, leading=9
-        )
+@admin.register(Creneau)
+class CreneauAdmin(admin.ModelAdmin):
+    """
+    Useful for verifying that the Excel import created the correct slots.
+    list_filter on date lets you click through days quickly.
+    """
 
-        story = [
-            Paragraph("Planning des Soutenances PFE", title_style),
-            Spacer(1, 0.3*cm),
-        ]
+    list_display  = ["id", "date", "slot", "salle", "capacite"]
+    search_fields = ["id", "salle"]
+    list_filter   = ["date", "slot"]
+    ordering      = ["date", "slot"]
 
-        headers = [
-            "Étudiant", "Domaine", "Sujet",
-            "Encadrant", "Examinateur", "Président",
-            "Date", "Salle",
-        ]
-        data = [headers]
 
-        for aff in affectations:
-            etu  = aff.etudiant
-            enc  = etu.encadrant if etu else None
-            exam = aff.examinateur
-            pres = aff.president
-            cr   = aff.creneau
+# ── Affectation ───────────────────────────────────────────────────────────────
 
-            sujet = ""
-            if etu:
-                sujet = (etu.sujet[:55] + "…") if len(etu.sujet) > 55 else etu.sujet
+class AffectationInline(admin.TabularInline):
+    """
+    Inline view — shown inside the Etudiant detail page.
+    Lets you see and edit an etudiant's jury assignment without
+    leaving the etudiant form.
 
-            data.append([
-                Paragraph(f"{etu.prenom} {etu.nom}" if etu else "", small),
-                Paragraph(etu.domaine[:12]          if etu else "", small),
-                Paragraph(sujet,                                     small),
-                Paragraph(enc.nom  if enc  else "", small),
-                Paragraph(exam.nom if exam else "", small),
-                Paragraph(pres.nom if pres else "", small),
-                Paragraph(f"{cr.date}\n{cr.slot}" if cr else "", small),
-                Paragraph(cr.salle if cr else "",                 small),
-            ])
+    TabularInline → compact horizontal table layout
+    StackedInline → vertical stacked layout (better for many fields)
+    """
 
-        col_widths_pdf = [
-            3.2*cm, 2.2*cm, 7.5*cm,
-            2.8*cm, 2.8*cm, 2.8*cm,
-            2.6*cm, 2.5*cm,
-        ]
+    model  = Affectation
+    extra  = 0         # don't show empty rows for adding new affectations
+    fields = ["examinateur", "president", "creneau", "score_exam", "score_pres"]
 
-        t = Table(data, colWidths=col_widths_pdf, repeatRows=1)
-        t.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, 0),  colors.HexColor("#1F4E79")),
-            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
-            ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
-            ("FONTSIZE",      (0, 0), (-1, 0),  8),
-            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, colors.HexColor("#EBF3FB")]),
-            ("GRID",          (0, 0), (-1, -1), 0.3, colors.HexColor("#CCCCCC")),
-            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 4),
-            ("RIGHTPADDING",  (0, 0), (-1, -1), 4),
-        ]))
+    # FK fields shown as popups (avoids huge dropdowns)
+    raw_id_fields = ["examinateur", "president", "creneau"]
 
-        story.append(t)
-        doc.build(story)
-        buf.seek(0)
 
-        # ── Stream PDF to client ───────────────────────────────────────────────
-        # Flask:  send_file(buf, mimetype="application/pdf",
-        #                   as_attachment=True, download_name="planning_PFE.pdf")
-        # Django: FileResponse with Content-Disposition header
-        response = FileResponse(buf, content_type="application/pdf")
-        response["Content-Disposition"] = 'attachment; filename="planning_PFE.pdf"'
-        return response
+@admin.register(Affectation)
+class AffectationAdmin(admin.ModelAdmin):
+    """
+    Main view for inspecting scheduler output.
+
+    score_exam and score_pres are readonly — they are computed by the NLP
+    engine and should not be changed manually.
+
+    list_select_related → tells Django admin to do a SELECT with JOINs
+    instead of N separate queries when rendering the list.
+    This is the admin equivalent of select_related() in views.
+    """
+
+    list_display  = [
+        "id",
+        "etudiant",
+        "examinateur",
+        "president",
+        "creneau",
+        "score_exam",
+        "score_pres",
+    ]
+    search_fields = [
+        "etudiant__nom",
+        "etudiant__prenom",
+        "examinateur__nom",
+        "president__nom",
+    ]
+    list_filter       = [
+        "creneau__date",
+        "etudiant__domaine",
+    ]
+    readonly_fields       = ["score_exam", "score_pres", "created_at"]
+    list_select_related   = True    # avoids N+1 queries in the list view
+    raw_id_fields         = ["etudiant", "examinateur", "president", "creneau"]
+    ordering              = ["creneau__date", "creneau__slot"]
+
+    # Show the assignment scores prominently at the top of the detail form
+    fieldsets = [
+        ("Jury",    {"fields": ["etudiant", "examinateur", "president", "creneau"]}),
+        ("Scores NLP", {
+            "fields":      ["score_exam", "score_pres"],
+            "description": "Scores calculés automatiquement par le moteur NLP — lecture seule.",
+        }),
+        ("Métadonnées", {
+            "fields":   ["created_at"],
+            "classes":  ["collapse"],   # collapsed by default — less clutter
+        }),
+    ]
