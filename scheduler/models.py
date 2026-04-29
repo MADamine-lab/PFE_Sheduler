@@ -28,6 +28,34 @@ Django REST Framework serializers (serializers.py) handle that job cleanly.
 
 from django.db import models
 from django.utils import timezone
+from django.contrib.auth.models import User
+
+
+# ── User Profile ──────────────────────────────────────────────────────────────
+
+class UserProfile(models.Model):
+    """
+    Extends Django User model with role-based access and links to domain models.
+    """
+    ROLE_CHOICES = [
+        ('admin', 'Administrateur'),
+        ('prof', 'Professeur'),
+        ('etudiant', 'Étudiant'),
+    ]
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='etudiant')
+
+    # Optional links to domain models
+    professeur = models.OneToOneField('Professeur', on_delete=models.SET_NULL, null=True, blank=True)
+    etudiant = models.OneToOneField('Etudiant', on_delete=models.SET_NULL, null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.user.username} ({self.role})"
+
+    class Meta:
+        verbose_name = "Profil utilisateur"
+        verbose_name_plural = "Profils utilisateurs"
 
 
 # ── Professeur ────────────────────────────────────────────────────────────────
@@ -59,6 +87,10 @@ class Professeur(models.Model):
     specialites    = models.TextField(blank=True, default="")
     grade          = models.CharField(max_length=50, blank=True, default="")
     disponibilites = models.TextField(blank=True, default="")
+
+    # ── Contact Information ────────────────────────────────────────────────────
+    email     = models.EmailField(blank=True, default="")
+    telephone = models.CharField(max_length=20, blank=True, default="")
 
     # ── Helper methods (kept from SQLAlchemy version) ──────────────────────────
     # Used internally by csp_scheduler.py — not exposed via API directly.
@@ -114,6 +146,10 @@ class Etudiant(models.Model):
     )
 
     annee = models.CharField(max_length=10, blank=True, default="")
+
+    # ── Contact Information ────────────────────────────────────────────────────
+    email     = models.EmailField(blank=True, default="")
+    telephone = models.CharField(max_length=20, blank=True, default="")
 
     def __str__(self):
         return f"{self.prenom} {self.nom} — {self.sujet[:50]}"

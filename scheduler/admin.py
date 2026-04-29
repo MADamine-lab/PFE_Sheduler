@@ -30,7 +30,7 @@ How Django admin works
 """
 
 from django.contrib import admin
-from .models import Etudiant, Professeur, Creneau, Affectation
+from .models import Etudiant, Professeur, Creneau, Affectation, UserProfile
 
 
 # ── Professeur ────────────────────────────────────────────────────────────────
@@ -158,3 +158,24 @@ class AffectationAdmin(admin.ModelAdmin):
             "classes":  ["collapse"],   # collapsed by default — less clutter
         }),
     ]
+
+
+# ── UserProfile ───────────────────────────────────────────────────────────────
+
+@admin.register(UserProfile)
+class UserProfileAdmin(admin.ModelAdmin):
+    """
+    Manage user roles and link users to their domain profiles.
+    """
+
+    list_display  = ["user", "role", "professeur", "etudiant"]
+    search_fields = ["user__username", "user__email", "role"]
+    list_filter   = ["role"]
+    ordering      = ["user__username"]
+
+    # Allow editing role and linking to domain models
+    fields = ["user", "role", "professeur", "etudiant"]
+    readonly_fields = ["user"]  # User field is read-only after creation
+
+    # Use raw_id_fields for professeur and etudiant to avoid dropdown performance issues
+    raw_id_fields = ["professeur", "etudiant"]

@@ -52,7 +52,7 @@ class ProfesseurSerializer(serializers.ModelSerializer):
         model  = Professeur
         # List every field React will receive.
         # Equivalent to the keys in your old .to_dict() return dict.
-        fields = ["id", "nom", "prenom", "domaine", "specialites", "grade", "disponibilites"]
+        fields = ["id", "nom", "prenom", "domaine", "specialites", "grade", "disponibilites", "email", "telephone"]
 
     def get_specialites(self, obj):
         # obj is a Professeur instance — same logic as .specialites_list()
@@ -69,9 +69,21 @@ class ProfesseurWriteSerializer(serializers.ModelSerializer):
     This keeps the write format consistent with file_parser.py output.
     """
 
+    def to_internal_value(self, data):
+        # Normalize list inputs into the string format expected by the model
+        if isinstance(data, dict):
+            data = data.copy()
+            for key in ("specialites", "disponibilites"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    data[key] = "; ".join(
+                        [str(item).strip() for item in value if str(item).strip()]
+                    )
+        return super().to_internal_value(data)
+
     class Meta:
         model  = Professeur
-        fields = ["id", "nom", "prenom", "domaine", "specialites", "grade", "disponibilites"]
+        fields = ["id", "nom", "prenom", "domaine", "specialites", "grade", "disponibilites", "email", "telephone"]
 
 
 # ── Etudiant ──────────────────────────────────────────────────────────────────
@@ -88,20 +100,61 @@ class EtudiantSerializer(serializers.ModelSerializer):
 
     # Expose the FK value directly (not the full nested object)
     # source="encadrant_id" reads the raw DB column value (string like "PROF001")
-    encadrant_id  = serializers.CharField(source="encadrant_id", read_only=True)
+    encadrant_id = serializers.CharField(read_only=True)
 
     # Computed field — same as  f"{enc.prenom} {enc.nom}"  in .to_dict()
     encadrant_nom = serializers.SerializerMethodField()
 
     class Meta:
         model  = Etudiant
-        fields = ["id", "nom", "prenom", "domaine", "sujet", "encadrant_id", "encadrant_nom", "annee"]
+        fields = ["id", "nom", "prenom", "domaine", "sujet", "encadrant_id", "encadrant_nom", "annee", "email", "telephone"]
 
     def get_encadrant_nom(self, obj):
         # obj.encadrant is the related Professeur instance (Django loads it automatically)
         if obj.encadrant:
             return f"{obj.encadrant.prenom} {obj.encadrant.nom}"
         return ""
+
+
+class EtudiantUpdateSerializer(serializers.ModelSerializer):
+    """
+    Used for PUT /api/etudiant/<id>/ and PUT /api/me/etudiant/
+    Allows updating student profile fields:
+    - sujet (subject)
+    - email
+    - telephone
+    - encadrant_id (supervisor - now writable for students)
+    """
+
+    # Accept encadrant_id on write (FK to Professeur)
+    encadrant_id = serializers.CharField(required=False, allow_blank=True)
+
+    class Meta:
+        model  = Etudiant
+        fields = ["sujet", "email", "telephone", "encadrant_id"]
+
+    def validate_encadrant_id(self, value):
+        """Validate that the encadrant exists"""
+        if value and value.strip():
+            # Check if professor with this ID exists
+            if not Professeur.objects.filter(id__iexact=value.strip()).exists():
+                raise serializers.ValidationError("Encadrant introuvable")
+        return value.strip() if value else None
+
+    def save(self, **kwargs):
+        """Handle encadrant FK assignment"""
+        encadrant_id = self.validated_data.pop("encadrant_id", None)
+        instance = super().save(**kwargs)
+        
+        if encadrant_id:
+            try:
+                professeur = Professeur.objects.get(id__iexact=encadrant_id)
+                instance.encadrant = professeur
+                instance.save()
+            except Professeur.DoesNotExist:
+                pass
+        
+        return instance
 
 
 # ── Creneau ───────────────────────────────────────────────────────────────────

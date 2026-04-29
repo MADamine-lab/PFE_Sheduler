@@ -25,7 +25,7 @@ urlpatterns = [
     # Free, zero-config. Visit http://localhost:8000/admin/
     # Create a superuser with:  python manage.py createsuperuser
     path("admin/", admin.site.urls),
-
+    path("api/", include("scheduler.urls")),
     # ── DRF browsable API auth (login/logout buttons in the browser UI) ────────
     # Only useful during development — lets you test endpoints in the browser
     # without Postman or React being ready yet.

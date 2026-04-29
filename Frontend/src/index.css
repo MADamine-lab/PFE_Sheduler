@@ -1,0 +1,162 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Work+Sans:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@layer base {
+	:root {
+		--brand-navy: #0b2d4d;
+		--brand-deep: #09253d;
+		--brand-sea: #2f6f84;
+		--brand-gold: #d4a657;
+		--brand-sand: #f6f1ea;
+		--brand-ice: #e9f2f6;
+		--brand-sky: #f4f8fa;
+		--text-primary: #17212b;
+		--text-muted: #526173;
+		--card-bg: rgba(255, 255, 255, 0.94);
+		--card-border: rgba(15, 23, 42, 0.08);
+		--shadow-soft: 0 20px 50px -32px rgba(15, 23, 42, 0.45);
+	}
+
+	* {
+		box-sizing: border-box;
+	}
+
+	body {
+		font-family: 'Work Sans', system-ui, -apple-system, sans-serif;
+		color: var(--text-primary);
+		background-color: var(--brand-sand);
+		background-image:
+			radial-gradient(circle at 12% 18%, rgba(212, 166, 87, 0.22), transparent 45%),
+			radial-gradient(circle at 85% 25%, rgba(47, 111, 132, 0.16), transparent 48%),
+			linear-gradient(120deg, #f6f1ea 0%, #eef3f6 45%, #e6edf3 100%);
+		min-height: 100vh;
+	}
+
+	h1, h2, h3, h4, h5 {
+		font-family: 'Playfair Display', 'Times New Roman', serif;
+		color: var(--text-primary);
+	}
+
+	input, select, textarea, button {
+		font-family: inherit;
+	}
+}
+
+@layer components {
+	.page-shell {
+		@apply mx-auto w-full max-w-6xl px-6 py-8 lg:px-10;
+	}
+
+	.page-hero {
+		@apply relative overflow-hidden rounded-3xl px-6 py-6 sm:px-8 sm:py-7;
+		background: linear-gradient(135deg, var(--brand-navy), #123a5a 55%, #154665 100%);
+		color: #f8fbfd;
+		box-shadow: 0 24px 60px -40px rgba(11, 45, 77, 0.8);
+	}
+
+	.card {
+		@apply rounded-2xl border;
+		border-color: var(--card-border);
+		background: var(--card-bg);
+		box-shadow: var(--shadow-soft);
+	}
+
+	.card-muted {
+		@apply rounded-2xl border;
+		border-color: rgba(15, 23, 42, 0.06);
+		background: rgba(248, 249, 251, 0.94);
+	}
+
+	.btn-primary {
+		@apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white transition;
+		background: linear-gradient(135deg, var(--brand-navy), #134b73);
+		box-shadow: 0 16px 40px -28px rgba(11, 45, 77, 0.9);
+	}
+
+	.btn-primary:hover {
+		filter: brightness(1.05);
+	}
+
+	.btn-primary:disabled {
+		@apply cursor-not-allowed opacity-60;
+	}
+
+	.btn-secondary {
+		@apply inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold text-slate-700 transition;
+		border-color: rgba(15, 23, 42, 0.12);
+		background: rgba(255, 255, 255, 0.92);
+	}
+
+	.btn-secondary:hover {
+		background: rgba(248, 249, 251, 0.98);
+		border-color: rgba(15, 23, 42, 0.2);
+	}
+
+	.input, .select {
+		@apply w-full rounded-xl border px-3 py-2 text-sm text-slate-900 shadow-sm;
+		border-color: rgba(15, 23, 42, 0.12);
+		background: white;
+	}
+
+	.input:focus, .select:focus {
+		outline: none;
+		border-color: rgba(47, 111, 132, 0.6);
+		box-shadow: 0 0 0 3px rgba(47, 111, 132, 0.18);
+	}
+
+	.badge {
+		@apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold;
+		background: rgba(15, 23, 42, 0.06);
+		color: #2f3b46;
+	}
+
+	.table-th {
+		@apply px-4 py-3 text-[0.7rem] font-semibold uppercase tracking-[0.2em];
+		color: var(--text-muted);
+	}
+
+	.table-td {
+		@apply px-4 py-3 text-sm text-slate-700;
+	}
+
+	.spinner {
+		width: 1.1rem;
+		height: 1.1rem;
+		border-radius: 9999px;
+		border: 2px solid currentColor;
+		border-top-color: transparent;
+		animation: spin 0.9s linear infinite;
+	}
+
+	.progress-bar-indeterminate {
+		position: relative;
+		height: 0.35rem;
+		overflow: hidden;
+		border-radius: 9999px;
+		background: rgba(15, 23, 42, 0.08);
+	}
+
+	.progress-bar-indeterminate::before {
+		content: '';
+		position: absolute;
+		inset: 0;
+		width: 35%;
+		background: linear-gradient(90deg, transparent, rgba(212, 166, 87, 0.9), transparent);
+		animation: slide 1.2s ease-in-out infinite;
+	}
+}
+
+@keyframes spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@keyframes slide {
+	0% {
+		transform: translateX(-80%);
+	}
+	100% {
+		transform: translateX(280%);
+	}
+}

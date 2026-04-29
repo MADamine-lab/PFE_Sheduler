@@ -34,17 +34,26 @@ from collections import defaultdict
 
 from django.shortcuts import get_object_or_404
 from django.db import transaction
+from django.contrib.auth import authenticate
+from django.contrib.auth.models import User
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FileUploadParser
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.authtoken.models import Token
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 
-from .models import Etudiant, Professeur, Creneau, Affectation
+from .models import Etudiant, Professeur, Creneau, Affectation, UserProfile
 from .serializers import (
     AffectationSerializer,
     AffectationUpdateSerializer,
     ProfesseurSerializer,
+    ProfesseurWriteSerializer,
+    EtudiantSerializer,
+    EtudiantUpdateSerializer,
     CreneauSerializer,
     UploadSummarySerializer,
     SchedulerResultSerializer,
@@ -565,3 +574,631 @@ class DashboardView(APIView):
             "by_date":       by_date,
             "avg_nlp_scores":avg_nlp,
         })
+
+class NlpStatusView(APIView):
+    """
+    GET /api/nlp/status/
+    Retourne le statut du modèle NLP (BERT ou fallback)
+    """
+    permission_classes = [AllowAny]  # Ou IsAuthenticated selon vos besoins
+    
+    def get(self, request):
+        # Importer le module de vérification NLP
+        from services.nlp_utils import get_nlp_status
+        
+        status = get_nlp_status()
+        return Response(status)
+
+@method_decorator(csrf_exempt, name='dispatch')
+class LoginView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        print("=== LOGIN DEBUG ===")
+        print("request.data:", request.data)
+        print("Content-Type:", request.content_type)
+    
+        identifier = request.data.get("email") or request.data.get("username")
+        password = request.data.get("password")
+    
+        print("identifier:", identifier)
+        print("password:", password)
+        if not identifier or not password:
+            return Response({"error": "Email et mot de passe requis."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Allow email or username login
+        user = authenticate(request, username=identifier, password=password)
+        if user is None:
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            try:
+                user_obj = User.objects.get(email__iexact=identifier)
+                if not user_obj.check_password(password):
+                    raise User.DoesNotExist
+                user = user_obj
+            except User.DoesNotExist:
+                return Response({"error": "Identifiants invalides."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        if not user.is_active:
+            return Response({"error": "Utilisateur inactif."}, status=status.HTTP_403_FORBIDDEN)
+
+        # Get or create user profile
+        profile, created = UserProfile.objects.get_or_create(
+            user=user,
+            defaults={'role': 'admin' if user.is_superuser else 'prof' if user.is_staff else 'etudiant'}
+        )
+
+        token, created = Token.objects.get_or_create(user=user)
+
+        response = Response({
+            "detail": "Authentification réussie",
+            "username": user.username,
+            "email": user.email,
+            "role": profile.role,
+            "is_superuser": user.is_superuser,
+            "is_staff": user.is_staff,
+        })
+
+        response.set_cookie(
+            "auth_token",
+            token.key,
+            httponly=True,
+            secure=request.is_secure(),
+            samesite="Lax",
+            max_age=60 * 60 * 24 * 7,
+        )
+
+        return response
+
+@method_decorator(csrf_exempt, name='dispatch')
+class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        token = request.auth
+        if token is not None:
+            token.delete()
+
+        response = Response({"detail": "Déconnexion réussie"})
+        response.delete_cookie("auth_token")
+        return response
+
+
+class MeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        try:
+            profile = user.profile
+            role = profile.role
+        except UserProfile.DoesNotExist:
+            # Fallback to old logic if profile doesn't exist
+            role = 'admin' if user.is_superuser else 'prof' if user.is_staff else 'etudiant'
+
+        return Response({
+            "username": user.username,
+            "email": user.email,
+            "role": role,
+            "is_superuser": user.is_superuser,
+            "is_staff": user.is_staff,
+        })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PROFESSEUR PROFILE
+#  Endpoints:
+#    GET  /api/professeur/<id>/    ← get teacher profile
+#    PUT  /api/professeur/<id>/    ← update teacher profile
+#    GET  /api/me/professeur/      ← get current user's teacher profile
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ProfesseurDetailView(APIView):
+    """
+    GET  /api/professeur/<id>/   — Retrieve a single professor
+    PUT  /api/professeur/<id>/   — Update professor profile (email, phone, specialties, availability)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, prof_id):
+        """Get professor profile"""
+        try:
+            prof = Professeur.objects.get(id__iexact=prof_id)
+        except Professeur.DoesNotExist:
+            return Response(
+                {"error": "Professeur non trouvé"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = ProfesseurSerializer(prof)
+        return Response(serializer.data)
+
+    def put(self, request, prof_id):
+        """Update professor profile"""
+        try:
+            prof = Professeur.objects.get(id__iexact=prof_id)
+        except Professeur.DoesNotExist:
+            return Response(
+                {"error": "Professeur non trouvé"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Use ProfesseurWriteSerializer to handle PUT data
+        serializer = ProfesseurWriteSerializer(prof, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            # Return full serializer data including computed fields
+            return Response(
+                ProfesseurSerializer(prof).data,
+                status=status.HTTP_200_OK
+            )
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class MyProfesseurView(APIView):
+    """
+    GET  /api/me/professeur/     — Get current user's professor profile
+    PUT  /api/me/professeur/     — Update current user's professor profile
+    
+    Searches for a Professeur by matching with user's email or username
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """Get current user's professor profile"""
+        user = request.user
+        
+        # Try to find by email first, then by username
+        prof = None
+        try:
+            # Try to match by email
+            prof = Professeur.objects.get(email__iexact=user.email)
+        except Professeur.DoesNotExist:
+            try:
+                # Try to match by ID (case-insensitive, username might be the professor ID)
+                prof = Professeur.objects.get(id__iexact=user.username)
+            except Professeur.DoesNotExist:
+                pass
+        
+        if not prof:
+            return Response(
+                {"error": "Aucun profil professeur trouvé pour cet utilisateur"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = ProfesseurSerializer(prof)
+        return Response(serializer.data)
+
+    def put(self, request):
+        """Update current user's professor profile"""
+        user = request.user
+        
+        # Try to find by email first, then by username
+        prof = None
+        try:
+            prof = Professeur.objects.get(email__iexact=user.email)
+        except Professeur.DoesNotExist:
+            try:
+                prof = Professeur.objects.get(id__iexact=user.username)
+            except Professeur.DoesNotExist:
+                pass
+        
+        if not prof:
+            return Response(
+                {"error": "Aucun profil professeur trouvé pour cet utilisateur"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = ProfesseurWriteSerializer(prof, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(
+                ProfesseurSerializer(prof).data,
+                status=status.HTTP_200_OK
+            )
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class MyProfesseurSpaceView(APIView):
+    """
+    GET  /api/me/professeur/espace/ — Return professor profile + supervised students
+
+    This powers the teacher space UI with the professor summary and the list of
+    students supervised by this professor.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        prof = None
+        try:
+            prof = Professeur.objects.get(email__iexact=user.email)
+        except Professeur.DoesNotExist:
+            try:
+                prof = Professeur.objects.get(id__iexact=user.username)
+            except Professeur.DoesNotExist:
+                pass
+
+        if not prof:
+            return Response(
+                {"error": "Aucun profil professeur trouvé pour cet utilisateur"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        etudiants = prof.etudiants_encadres.select_related("encadrant").all()
+
+        return Response(
+            {
+                "profile": ProfesseurSerializer(prof).data,
+                "stats": {
+                    "etudiants": etudiants.count(),
+                    "specialites": len(prof.specialites_list()),
+                    "disponibilites": len(prof.disponibilites_list()),
+                },
+                "etudiants": [
+                    {
+                        "id": e.id,
+                        "nom": e.nom,
+                        "prenom": e.prenom,
+                        "domaine": e.domaine,
+                        "sujet": e.sujet,
+                        "annee": e.annee,
+                        "email": e.email,
+                        "telephone": e.telephone,
+                    }
+                    for e in etudiants
+                ],
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ETUDIANT PROFILE
+#  Endpoints:
+#    GET  /api/etudiant/<id>/     ← get student profile
+#    PUT  /api/etudiant/<id>/     ← update student profile
+#    GET  /api/me/etudiant/       ← get current user's student profile
+# ══════════════════════════════════════════════════════════════════════════════
+
+class EtudiantDetailView(APIView):
+    """
+    GET  /api/etudiant/<id>/     — Retrieve a single student
+    PUT  /api/etudiant/<id>/     — Update student profile (subject, email, phone)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, etudiant_id):
+        """Get student profile"""
+        try:
+            etudiant = Etudiant.objects.get(id__iexact=etudiant_id)
+        except Etudiant.DoesNotExist:
+            return Response(
+                {"error": "Étudiant non trouvé"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = EtudiantSerializer(etudiant)
+        return Response(serializer.data)
+
+    def put(self, request, etudiant_id):
+        """Update student profile"""
+        try:
+            etudiant = Etudiant.objects.get(id__iexact=etudiant_id)
+        except Etudiant.DoesNotExist:
+            return Response(
+                {"error": "Étudiant non trouvé"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # For student updates, we need custom logic for encadrant_id
+        serializer = EtudiantUpdateSerializer(etudiant, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            # Return full serializer data
+            return Response(
+                EtudiantSerializer(etudiant).data,
+                status=status.HTTP_200_OK
+            )
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class MyEtudiantView(APIView):
+    """
+    GET  /api/me/etudiant/       — Get current user's student profile
+    PUT  /api/me/etudiant/       — Update current user's student profile
+    
+    Searches for an Etudiant by matching with user's email or username
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """Get current user's student profile"""
+        user = request.user
+        
+        # Try to find by email first, then by username
+        etudiant = None
+        try:
+            # Try to match by email
+            etudiant = Etudiant.objects.get(email__iexact=user.email)
+        except Etudiant.DoesNotExist:
+            try:
+                # Try to match by ID (case-insensitive, username might be the student ID)
+                etudiant = Etudiant.objects.get(id__iexact=user.username)
+            except Etudiant.DoesNotExist:
+                pass
+        
+        if not etudiant:
+            return Response(
+                {"error": "Aucun profil étudiant trouvé pour cet utilisateur"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = EtudiantSerializer(etudiant)
+        return Response(serializer.data)
+
+    def put(self, request):
+        """Update current user's student profile"""
+        user = request.user
+        
+        # Try to find by email first, then by username
+        etudiant = None
+        try:
+            etudiant = Etudiant.objects.get(email__iexact=user.email)
+        except Etudiant.DoesNotExist:
+            try:
+                etudiant = Etudiant.objects.get(id__iexact=user.username)
+            except Etudiant.DoesNotExist:
+                pass
+        
+        if not etudiant:
+            return Response(
+                {"error": "Aucun profil étudiant trouvé pour cet utilisateur"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = EtudiantUpdateSerializer(etudiant, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(
+                EtudiantSerializer(etudiant).data,
+                status=status.HTTP_200_OK
+            )
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DATA INSPECTION & ACCOUNT CREATION
+#  Test endpoints to view existing data and create user accounts
+# ══════════════════════════════════════════════════════════════════════════════
+
+class DataView(APIView):
+    """
+    GET /api/data/ — Show all existing etudiants, professeurs, and users
+    
+    Useful for:
+      - Inspecting what data exists in the database
+      - Testing with real data from MySQL
+      - Debugging user/profile matching
+    """
+    permission_classes = [AllowAny]  # Allow inspection without authentication
+
+    def get(self, request):
+        """Return all etudiants, professeurs, and users"""
+        etudiants = Etudiant.objects.select_related("encadrant").all()
+        professeurs = Professeur.objects.all()
+        users = User.objects.all()
+        
+        return Response({
+            "etudiants": [
+                {
+                    "id": e.id,
+                    "nom": e.nom,
+                    "prenom": e.prenom,
+                    "sujet": e.sujet,
+                    "encadrant_id": e.encadrant.id if e.encadrant else "",
+                    "encadrant_nom": f"{e.encadrant.prenom} {e.encadrant.nom}" if e.encadrant else "",
+                    "email": e.email,
+                    "telephone": e.telephone,
+                    "domaine": e.domaine,
+                }
+                for e in etudiants
+            ],
+            "professeurs": [
+                {
+                    "id": p.id,
+                    "nom": p.nom,
+                    "prenom": p.prenom,
+                    "email": p.email,
+                    "telephone": p.telephone,
+                    "domaine": p.domaine,
+                    "grade": p.grade,
+                }
+                for p in professeurs
+            ],
+            "users": [
+                {
+                    "id": u.id,
+                    "username": u.username,
+                    "email": u.email,
+                    "first_name": u.first_name,
+                    "last_name": u.last_name,
+                }
+                for u in users
+            ],
+            "counts": {
+                "etudiants": etudiants.count(),
+                "professeurs": professeurs.count(),
+                "users": users.count(),
+            }
+        }, status=status.HTTP_200_OK)
+
+
+class CreateAccountsView(APIView):
+    """
+    POST /api/create-accounts/ — Auto-create Django user accounts
+    
+    Creates a user account for each etudiant and professeur.
+    If they don't have an email, generates one based on their ID and name.
+    
+    Usage:
+      - If record has email: uses email as username
+      - If record has NO email: generates email from ID (e.g., e0120@example.com)
+    
+    All accounts use default password: password123
+    """
+    permission_classes = [AllowAny]  # Allow account creation without authentication
+
+    def post(self, request):
+        """Create user accounts for all etudiants and professeurs"""
+        created_accounts = []
+        skipped = []
+        errors = []
+        
+        default_password = "password123"
+        
+        # Create accounts for etudiants
+        for etudiant in Etudiant.objects.all():
+            try:
+                # Determine username and email:
+                # - If email exists: use email as username
+                # - If no email: use ID as username, generate dummy email
+                if etudiant.email.strip():
+                    email = etudiant.email.strip()
+                    username = email.lower()
+                else:
+                    # Use ID as username, generate dummy email
+                    username = etudiant.id.lower()
+                    email = f"{etudiant.id.lower()}@uniproject.local"
+                
+                # Check if user already exists
+                user, created = User.objects.get_or_create(
+                    username=username,
+                    defaults={
+                        "email": email,
+                        "first_name": etudiant.prenom,
+                        "last_name": etudiant.nom,
+                    }
+                )
+
+                # Ensure user profile role is etudiant
+                profile, _ = UserProfile.objects.get_or_create(
+                    user=user,
+                    defaults={"role": "etudiant"}
+                )
+                if profile.role != "etudiant":
+                    profile.role = "etudiant"
+                    profile.save()
+                
+                if created:
+                    # Set password only for new users
+                    user.set_password(default_password)
+                    user.save()
+                    created_accounts.append({
+                        "type": "etudiant",
+                        "id": etudiant.id,
+                        "name": f"{etudiant.prenom} {etudiant.nom}",
+                        "username": username,
+                        "email": email,
+                        "password": default_password,
+                        "status": "created"
+                    })
+                else:
+                    created_accounts.append({
+                        "type": "etudiant",
+                        "id": etudiant.id,
+                        "name": f"{etudiant.prenom} {etudiant.nom}",
+                        "username": username,
+                        "email": email,
+                        "status": "already_exists"
+                    })
+            except Exception as e:
+                errors.append({
+                    "type": "etudiant",
+                    "id": etudiant.id,
+                    "name": f"{etudiant.prenom} {etudiant.nom}",
+                    "error": str(e)
+                })
+        
+        # Create accounts for professeurs
+        for professeur in Professeur.objects.all():
+            try:
+                # Determine username and email (same logic as etudiants)
+                if professeur.email.strip():
+                    email = professeur.email.strip()
+                    username = email.lower()
+                else:
+                    # Use ID as username, generate dummy email
+                    username = professeur.id.lower()
+                    email = f"{professeur.id.lower()}@uniproject.local"
+                
+                # Check if user already exists
+                user, created = User.objects.get_or_create(
+                    username=username,
+                    defaults={
+                        "email": email,
+                        "first_name": professeur.prenom,
+                        "last_name": professeur.nom,
+                    }
+                )
+
+                # Ensure professor accounts are staff and have prof role
+                if not user.is_staff and not user.is_superuser:
+                    user.is_staff = True
+                    user.save()
+
+                profile, _ = UserProfile.objects.get_or_create(
+                    user=user,
+                    defaults={"role": "prof"}
+                )
+                if profile.role != "prof":
+                    profile.role = "prof"
+                    profile.save()
+                
+                if created:
+                    # Set password only for new users
+                    user.set_password(default_password)
+                    user.save()
+                    created_accounts.append({
+                        "type": "professeur",
+                        "id": professeur.id,
+                        "name": f"{professeur.prenom} {professeur.nom}",
+                        "username": username,
+                        "email": email,
+                        "password": default_password,
+                        "status": "created"
+                    })
+                else:
+                    created_accounts.append({
+                        "type": "professeur",
+                        "id": professeur.id,
+                        "name": f"{professeur.prenom} {professeur.nom}",
+                        "username": username,
+                        "email": email,
+                        "status": "already_exists"
+                    })
+            except Exception as e:
+                errors.append({
+                    "type": "professeur",
+                    "id": professeur.id,
+                    "name": f"{professeur.prenom} {professeur.nom}",
+                    "error": str(e)
+                })
+        
+        return Response({
+            "message": "Account creation process completed",
+            "created_accounts": created_accounts,
+            "skipped": skipped,
+            "errors": errors,
+            "summary": {
+                "total_created": len([a for a in created_accounts if a.get("status") == "created"]),
+                "total_already_exists": len([a for a in created_accounts if a.get("status") == "already_exists"]),
+                "total_skipped": len(skipped),
+                "total_errors": len(errors),
+            }
+        }, status=status.HTTP_201_CREATED)

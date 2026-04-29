@@ -43,6 +43,11 @@ You never call it yourself — Django calls it on every incoming request.
 """
 
 from django.urls import path
+from django.middleware.csrf import get_token
+from django.http import JsonResponse
+from django.views.decorators.http import require_GET
+
+
 
 from .views import (
     UploadView,
@@ -51,11 +56,27 @@ from .views import (
     AffectationListView,
     AffectationDetailView,
     ProfesseurListView,
+    ProfesseurDetailView,
+    MyProfesseurView,
+    MyProfesseurSpaceView,
     CreneauListView,
+    EtudiantDetailView,
+    MyEtudiantView,
     DashboardView,
+    LoginView,
+    LogoutView,
+    MeView,
+    NlpStatusView,
+    DataView,
+    CreateAccountsView,
 )
 from .export import ExportExcelView, ExportPdfView
 
+
+@require_GET
+def csrf_token_view(request):
+    # get_token also sets the csrftoken cookie on the response
+    return JsonResponse({"csrfToken": get_token(request)})
 
 urlpatterns = [
 
@@ -100,4 +121,36 @@ urlpatterns = [
     # React sends:  GET http://localhost:8000/api/stats/dashboard/
     #               Response: { counts, by_domain, jury_load, by_date, avg_nlp_scores }
     path("stats/dashboard/", DashboardView.as_view(), name="stats-dashboard"),
+
+    # ── Professeur Profile ─────────────────────────────────────────────────
+    # React sends:  GET/PUT http://localhost:8000/api/professeur/<id>/
+    path("professeur/<str:prof_id>/", ProfesseurDetailView.as_view(), name="professeur-detail"),
+
+    # ── Professeur Me (Current User) ────────────────────────────────────────
+    # React sends:  GET/PUT http://localhost:8000/api/me/professeur/
+    path("me/professeur/", MyProfesseurView.as_view(), name="me-professeur"),
+
+    # ── Professeur Space (Current User) ──────────────────────────────────────
+    # React sends:  GET http://localhost:8000/api/me/professeur/espace/
+    path("me/professeur/espace/", MyProfesseurSpaceView.as_view(), name="me-professeur-espace"),
+
+    # ── Etudiant Profile ───────────────────────────────────────────────────
+    # React sends:  GET/PUT http://localhost:8000/api/etudiant/<id>/
+    path("etudiant/<str:etudiant_id>/", EtudiantDetailView.as_view(), name="etudiant-detail"),
+
+    # ── Etudiant Me (Current User) ──────────────────────────────────────────
+    # React sends:  GET/PUT http://localhost:8000/api/me/etudiant/
+    path("me/etudiant/", MyEtudiantView.as_view(), name="me-etudiant"),
+
+    # ── Auth ───────────────────────────────────────────────────────────────────
+    path("auth/csrf/", csrf_token_view, name="csrf-token"),
+    path("auth/login/",  LoginView.as_view(), name="auth-login"),
+    path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
+    path("auth/me/",     MeView.as_view(),   name="auth-me"),
+
+    # ── Data & Account Management (Testing) ────────────────────────────────────
+    # Inspect existing data
+    path("data/", DataView.as_view(), name="data"),
+    # Create user accounts for all etudiants/professeurs with emails
+    path("create-accounts/", CreateAccountsView.as_view(), name="create-accounts"),
 ]
